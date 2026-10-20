@@ -1,0 +1,29 @@
+# Operating System files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+*.stackdump
+
+# Python virtual environments & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+
+# Lock files and archives
+*.lock
+*.zip
+*.tar.gz
+*.7z
+
+# Temporary files & logs
+*.tmp
+*.log
+scratch/
+test_build/
+downloads/

@@ -1,0 +1,16 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Explicitly mark shapefile sidecar formats as binary
+*.shp binary
+*.shx binary
+*.dbf binary
+*.prj binary
+*.cpg binary
+
+# Markdown and code formatting
+*.md text eol=lf
+*.py text eol=lf
+*.csv text eol=lf
+*.geojson text eol=lf
+*.txt text eol=lf
