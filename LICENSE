@@ -1,0 +1,25 @@
+# Open Data Commons Open Database License (ODbL) v1.0 Notice
+
+This repository provides an index grid and metadata for the GlobalBuildingAtlas `GBA.ODbLPolygon` dataset.
+
+The underlying dataset and this index are made available under the **Open Database License (ODbL) v1.0**:
+https://opendatacommons.org/licenses/odbl/1-0/
+
+Any rights in individual contents of the database are licensed under the **Database Contents License (DbCL) v1.0**:
+https://opendatacommons.org/licenses/dbcl/1-0/
+
+---
+
+### Human-Readable Summary of ODbL 1.0
+
+You are free:
+- **To Share**: To copy, distribute and use the database.
+- **To Create**: To produce works from the database.
+- **To Adapt**: To modify, transform and build upon the database.
+
+As long as you:
+- **Attribute**: You must attribute any public use of the database, or works produced from the database, in the manner specified in the `NOTICE.md` file (or license instructions). For any use or redistribution of the database, or works produced from it, you must make clear to others the license of the database and keep intact any notices on the original database.
+- **Share-Alike**: If you publicly use any adapted version of this database, or works produced from an adapted database, you must also offer that adapted database under the ODbL.
+- **Keep Open**: If you redistribute the database, or an adapted version of it, then you may use technological measures that restrict the work (such as DRM) only if you also distribute an equivalent copy without such measures.
+
+For the full legal text of the license, see https://opendatacommons.org/licenses/odbl/1.0/.
