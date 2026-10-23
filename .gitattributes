@@ -7,6 +7,10 @@
 *.dbf binary
 *.prj binary
 *.cpg binary
+*.zip binary
+*.mp4 binary
+*.mp3 binary
+*.png binary
 
 # Markdown and code formatting
 *.md text eol=lf

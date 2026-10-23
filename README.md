@@ -13,8 +13,17 @@ The upstream Hugging Face repository stores hundreds of gigabytes of individual 
 
 ---
 
+## 🎬 Video Walkthrough
+
+[![GlobalBuildingAtlas Downloader Demo](preview.png)](gba_intro_video.mp4)
+
+> 📹 **Introductory Showcase**: Watch [`gba_intro_video.mp4`](gba_intro_video.mp4) for a visual overview of the dataset structure, repository features, and the QGIS plugin in action.
+
+---
+
 ## Table of Contents
 
+- [Video Walkthrough](#-video-walkthrough)
 - [About the Dataset and Data Host](#about-the-dataset-and-data-host)
 - [Repository Contents](#repository-contents)
 - [QGIS Plugin: GBA Building Footprint Downloader](#qgis-plugin-gba-building-footprint-downloader)
@@ -57,6 +66,8 @@ GBA-building-footprint-tile-index/
 ├── README.md                      # Comprehensive user documentation and usage workflows
 ├── LICENSE                        # Open Database License (ODbL) v1.0 Notice
 ├── NOTICE.md                      # Upstream data provenance and attribution
+├── gba_intro_video.mp4            # Project showcase video walkthrough (HyperFrames)
+├── preview.png                    # Video preview thumbnail
 ├── tile_index.csv                 # Flat tabular index with bounding coordinates
 ├── building_footprint/
 │   ├── GBA_ODbLPolygon_grid.shp   # Main ESRI Shapefile polygon layer (EPSG:4326)
@@ -65,7 +76,7 @@ GBA-building-footprint-tile-index/
 │   ├── GBA_ODbLPolygon_grid.prj   # WGS84 CRS definition
 │   ├── GBA_ODbLPolygon_grid.cpg   # UTF-8 encoding declaration
 │   └── GBA_ODbLPolygon_grid.geojson # Web-renderable GeoJSON map (renders on GitHub)
-├── qgis_plugin/                   # Dedicated QGIS GUI Downloader Plugin
+├── qgis_plugin/                   # Dedicated QGIS GUI Downloader Plugin (v1.1.0)
 │   ├── gba_downloader.zip         # Ready-to-install plugin archive (Install from ZIP)
 │   └── gba_downloader/            # Source plugin package (metadata, UI, QgsTask downloader)
 ├── docs/
@@ -83,17 +94,21 @@ GBA-building-footprint-tile-index/
 This repository includes a dedicated, feature-packed QGIS plugin located in [`qgis_plugin/gba_downloader/`](qgis_plugin/gba_downloader/):
 
 ![Plugin Features](https://img.shields.io/badge/QGIS-3.16_to_3.99-green.svg)
+![Version](https://img.shields.io/badge/Version-v1.1.0-blue.svg)
 ![Multi-threaded](https://img.shields.io/badge/QgsTask-Non--blocking-blue.svg)
+![Spatial Clipping](https://img.shields.io/badge/AOI-Auto--Clipping-orange.svg)
 
 ### Plugin Highlights:
-1. **Built-in 5° × 5° Grid**: Instantly displays the global index grid on your QGIS map canvas styled with semi-transparent fills and tile name/size labels.
-2. **Instant Spatial Queries**:
+1. **Interactive AOI Drawing (`QgsMapToolExtent`)**: Click **🎯 Draw AOI Rectangle on Canvas** and drag a bounding box directly on your map to specify your exact project study area.
+2. **Automatic Spatial Clipping to AOI**: When downloading large 5° × 5° tiles (often 500 MB–2.8 GB), the plugin reprojects and clips the building footprints strictly to your drawn rectangle, preventing memory overload and plotting only the structures in your area.
+3. **Built-in 5° × 5° Grid**: Instantly displays the global index grid on your QGIS map canvas styled with semi-transparent fills and tile name/size labels.
+4. **Spatial & Layer Queries**:
    - **Canvas Extent**: Queries and selects all tiles intersecting your current map view.
    - **Vector Layer Intersection**: Intersects any polygon vector layer in your project (e.g. city boundaries, district polygons, river basins) with the GBA grid.
    - **Interactive Selection**: Select tiles directly using QGIS's map canvas selection tool.
-3. **Bandwidth & Storage Estimation**: Summarizes selected tile counts and total download sizes (in MB and GB), flagging empty tiles ($0\text{ MB}$) and huge files ($>1\text{ GB}$).
-4. **Asynchronous Background Downloads (`QgsTask`)**: Downloads files on worker threads with live transfer speeds and progress bars without freezing QGIS.
-5. **Automatic Layer Loading**: Automatically styles and loads downloaded GeoJSON footprints into your QGIS canvas under a dedicated `GlobalBuildingAtlas Footprints` layer group.
+5. **Bandwidth & Storage Estimation**: Summarizes selected tile counts and total download sizes (in MB and GB), flagging empty tiles ($0\text{ MB}$) and huge files ($>1\text{ GB}$).
+6. **Asynchronous Background Downloads (`QgsTask`)**: Downloads files on worker threads with live transfer speeds and progress bars without freezing QGIS.
+7. **Automatic Layer Styling**: Automatically styles and loads extracted GeoJSON footprints into your QGIS canvas under a dedicated `GlobalBuildingAtlas Footprints` layer group and zooms to fit.
 
 ### Installing the Plugin:
 - **Option A (Install from ZIP)**: In QGIS, open **Plugins** $\to$ **Manage and Install Plugins...** $\to$ **Install from ZIP**, select [`qgis_plugin/gba_downloader.zip`](qgis_plugin/gba_downloader.zip), and click **Install Plugin**.

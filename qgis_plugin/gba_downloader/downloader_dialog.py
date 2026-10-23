@@ -3,8 +3,12 @@
 downloader_dialog.py
 ====================
 Interactive PyQt Dialog for GBA Building Footprint Downloader.
-Handles spatial extent queries, layer intersection, tile selection,
-and triggers asynchronous background downloads via QgsTask.
+Supports:
+  1. Plotting / drawing an Area of Interest (AOI) directly on the QGIS canvas
+  2. Spatial extent and layer intersection queries
+  3. Bandwidth calculation & tile inspection
+  4. Asynchronous background downloading via QgsTask
+  5. Auto-loading building footprints clipped or filtered to the user's AOI
 """
 
 import os
@@ -17,12 +21,14 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.PyQt.QtCore import Qt, QSettings
 from qgis.PyQt.QtGui import QColor, QFont, QIcon, QBrush
+from qgis.gui import QgsMapToolExtent, QgsRubberBand
 from qgis.core import (
     QgsProject, QgsVectorLayer, QgsCoordinateTransform,
     QgsCoordinateReferenceSystem, QgsRectangle, QgsGeometry,
     QgsApplication, QgsSymbol, QgsSingleSymbolRenderer,
     QgsFillSymbol, QgsPalLayerSettings, QgsVectorLayerSimpleLabeling,
-    QgsTextFormat, QgsTextBufferSettings
+    QgsTextFormat, QgsTextBufferSettings, QgsWkbTypes, QgsFeatureRequest,
+    QgsMessageLog, Qgis
 )
 
 from .download_task import GBADownloadTask
@@ -30,7 +36,7 @@ from .download_task import GBADownloadTask
 
 class GBADownloaderDialog(QDialog):
     """
-    Main interactive dialog for exploring and downloading GBA building footprints.
+    Main interactive dialog for exploring, plotting AOIs, and downloading GBA building footprints.
     """
 
     GRID_LAYER_NAME = "GlobalBuildingAtlas Tile Grid (5x5)"
@@ -45,12 +51,16 @@ class GBADownloaderDialog(QDialog):
         self.all_tiles = []        # All 922 tile records
         self.displayed_tiles = []  # Filtered/selected records in table
         self.active_task = None
+        self.extent_tool = None
+        self.rubber_band = None
+        self.last_aoi_rect = None  # in EPSG:4326
+        self.last_aoi_geom = None  # in EPSG:4326
 
         self.setWindowTitle("GlobalBuildingAtlas - Building Footprint Downloader")
         if os.path.exists(self.icon_path):
             self.setWindowIcon(QIcon(self.icon_path))
 
-        self.resize(850, 700)
+        self.resize(880, 740)
         self.load_grid_data()
         self.setup_ui()
         self.populate_table(self.all_tiles)
@@ -75,7 +85,7 @@ class GBADownloaderDialog(QDialog):
                         props["bbox"] = bbox
                         self.all_tiles.append(props)
             except Exception as e:
-                print(f"Error reading bundled GeoJSON: {e}")
+                QgsMessageLog.logMessage(f"Error reading bundled GeoJSON: {e}", "GBADownloader", Qgis.Critical)
 
     def setup_ui(self):
         """Constructs the dialog layout and widgets."""
@@ -101,7 +111,7 @@ class GBADownloaderDialog(QDialog):
         title_lbl.setFont(title_font)
         title_lbl.setStyleSheet("color: #0F172A;")
 
-        subtitle_lbl = QLabel("Browse, query, and download 5° × 5° building footprint tiles (OpenStreetMap & Microsoft ML) directly into QGIS.")
+        subtitle_lbl = QLabel("Plot an Area of Interest (AOI) to discover, download, and extract building footprints (OSM & Microsoft ML) directly into QGIS.")
         subtitle_lbl.setStyleSheet("color: #475569; font-size: 11px;")
         title_layout.addWidget(title_lbl)
         title_layout.addWidget(subtitle_lbl)
@@ -116,52 +126,60 @@ class GBADownloaderDialog(QDialog):
 
         layout.addWidget(header_frame)
 
-        # 2. Spatial Query & Filter Group
-        query_group = QGroupBox("Spatial Query & Filter")
-        query_layout = QVBoxLayout(query_group)
+        # 2. Area of Interest (AOI) & Selection Tools Group
+        aoi_group = QGroupBox("1. Define Area of Interest (AOI)")
+        aoi_layout = QVBoxLayout(aoi_group)
 
-        btn_row = QHBoxLayout()
-        self.btn_canvas_extent = QPushButton("Intersect Current Map Extent")
+        # Primary AOI buttons row
+        aoi_btn_row = QHBoxLayout()
+
+        self.btn_draw_aoi = QPushButton("🎯 Draw AOI Rectangle on Canvas")
+        self.btn_draw_aoi.setToolTip("Click here, then click and drag a box directly on your map canvas to define your study area.")
+        self.btn_draw_aoi.setStyleSheet("background-color: #EA580C; color: white; font-weight: bold; padding: 6px 14px; border-radius: 4px;")
+        self.btn_draw_aoi.clicked.connect(self.activate_draw_aoi_tool)
+        aoi_btn_row.addWidget(self.btn_draw_aoi)
+
+        self.btn_canvas_extent = QPushButton("Intersect Current View Extent")
         self.btn_canvas_extent.clicked.connect(self.filter_by_canvas_extent)
-        btn_row.addWidget(self.btn_canvas_extent)
+        aoi_btn_row.addWidget(self.btn_canvas_extent)
 
         self.combo_layers = QComboBox()
         self.combo_layers.setMinimumWidth(180)
         self.refresh_vector_layers()
-        btn_row.addWidget(self.combo_layers)
+        aoi_btn_row.addWidget(self.combo_layers)
 
-        self.btn_layer_intersect = QPushButton("Intersect Active Layer")
+        self.btn_layer_intersect = QPushButton("Intersect Selected Layer")
         self.btn_layer_intersect.clicked.connect(self.filter_by_layer)
-        btn_row.addWidget(self.btn_layer_intersect)
+        aoi_btn_row.addWidget(self.btn_layer_intersect)
 
-        self.btn_sync_selection = QPushButton("Use Map Selection")
-        self.btn_sync_selection.clicked.connect(self.sync_from_map_selection)
-        btn_row.addWidget(self.btn_sync_selection)
+        aoi_layout.addLayout(aoi_btn_row)
 
-        self.btn_reset_filter = QPushButton("Show All 922 Tiles")
-        self.btn_reset_filter.clicked.connect(lambda: self.populate_table(self.all_tiles))
-        btn_row.addWidget(self.btn_reset_filter)
-
-        query_layout.addLayout(btn_row)
-
-        # Quick text search row
-        search_row = QHBoxLayout()
-        search_lbl = QLabel("Filter text:")
+        # Secondary search and selection controls row
+        ctrl_row = QHBoxLayout()
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Search by tile name (e.g. e000_n10) or region (e.g. europe)...")
+        self.txt_search.setPlaceholderText("Filter by tile name (e.g. e070_n35) or region (e.g. europe, asiawest)...")
         self.txt_search.textChanged.connect(self.filter_by_text)
-        search_row.addWidget(search_lbl)
-        search_row.addWidget(self.txt_search)
+        ctrl_row.addWidget(self.txt_search)
+
+        self.btn_sync_selection = QPushButton("Use Canvas Selection")
+        self.btn_sync_selection.setToolTip("Sync with features selected on the GBA grid layer.")
+        self.btn_sync_selection.clicked.connect(self.sync_from_map_selection)
+        ctrl_row.addWidget(self.btn_sync_selection)
 
         self.btn_check_all = QPushButton("Check All")
         self.btn_check_all.clicked.connect(lambda: self.set_all_checked(True))
+        ctrl_row.addWidget(self.btn_check_all)
+
         self.btn_uncheck_all = QPushButton("Uncheck All")
         self.btn_uncheck_all.clicked.connect(lambda: self.set_all_checked(False))
-        search_row.addWidget(self.btn_check_all)
-        search_row.addWidget(self.btn_uncheck_all)
+        ctrl_row.addWidget(self.btn_uncheck_all)
 
-        query_layout.addLayout(search_row)
-        layout.addWidget(query_group)
+        self.btn_reset_filter = QPushButton("Reset / Show All 922")
+        self.btn_reset_filter.clicked.connect(self.reset_to_all_tiles)
+        ctrl_row.addWidget(self.btn_reset_filter)
+
+        aoi_layout.addLayout(ctrl_row)
+        layout.addWidget(aoi_group)
 
         # 3. Tiles Table Widget
         self.table = QTableWidget()
@@ -179,13 +197,16 @@ class GBADownloaderDialog(QDialog):
         layout.addWidget(self.table)
 
         # 4. Output Settings Group
-        settings_group = QGroupBox("Download Settings")
+        settings_group = QGroupBox("2. Download & Extraction Settings")
         settings_layout = QVBoxLayout(settings_group)
 
         dir_row = QHBoxLayout()
         dir_lbl = QLabel("Save Folder:")
         self.txt_dir = QLineEdit()
-        saved_dir = QSettings().value("GBADownloader/download_dir", os.path.join(os.path.expanduser("~"), "Downloads", "GBA_Building_Footprints"))
+        saved_dir = QSettings().value(
+            "GBADownloader/download_dir",
+            os.path.join(os.path.expanduser("~"), "Downloads", "GBA_Building_Footprints")
+        )
         self.txt_dir.setText(saved_dir)
 
         self.btn_browse = QPushButton("Browse...")
@@ -196,14 +217,30 @@ class GBADownloaderDialog(QDialog):
         settings_layout.addLayout(dir_row)
 
         opts_row = QHBoxLayout()
-        self.chk_auto_load = QCheckBox("Automatically add downloaded GeoJSON footprints to project canvas")
+        self.chk_clip_to_aoi = QCheckBox("Clip & display ONLY buildings inside my drawn AOI (Recommended)")
+        self.chk_clip_to_aoi.setToolTip("When checked, extracts only the building polygons that intersect your drawn AOI box, discarding unwanted distant buildings.")
+        self.chk_clip_to_aoi.setChecked(True)
+        opts_row.addWidget(self.chk_clip_to_aoi)
+
+        self.chk_auto_load = QCheckBox("Auto-add layer to map")
         self.chk_auto_load.setChecked(True)
-        self.chk_skip_existing = QCheckBox("Skip files that already exist on disk")
-        self.chk_skip_existing.setChecked(True)
         opts_row.addWidget(self.chk_auto_load)
+
+        self.chk_skip_existing = QCheckBox("Skip already downloaded files")
+        self.chk_skip_existing.setChecked(True)
         opts_row.addWidget(self.chk_skip_existing)
+
         opts_row.addStretch()
         settings_layout.addLayout(opts_row)
+
+        # Informative note about Hugging Face dataset format
+        lbl_note = QLabel(
+            "ℹ️ Note: GlobalBuildingAtlas stores data on Hugging Face as static 5° × 5° GeoJSON tiles (~500 km × 500 km). "
+            "The plugin downloads the tile covering your study area and automatically extracts ONLY the building footprints inside your plotted AOI."
+        )
+        lbl_note.setWordWrap(True)
+        lbl_note.setStyleSheet("color: #64748B; font-size: 10px; font-style: italic;")
+        settings_layout.addWidget(lbl_note)
 
         layout.addWidget(settings_group)
 
@@ -221,7 +258,7 @@ class GBADownloaderDialog(QDialog):
         self.progress_bar.setVisible(False)
         summary_layout.addWidget(self.progress_bar)
 
-        self.lbl_status = QLabel("Ready")
+        self.lbl_status = QLabel("Ready. Click '🎯 Draw AOI Rectangle on Canvas' to begin.")
         self.lbl_status.setStyleSheet("color: #64748B; font-size: 11px;")
         summary_layout.addWidget(self.lbl_status)
 
@@ -231,9 +268,9 @@ class GBADownloaderDialog(QDialog):
         btn_action_layout = QHBoxLayout()
         btn_action_layout.addStretch()
 
-        self.btn_download = QPushButton("Download Selected Tiles")
+        self.btn_download = QPushButton("Download & Plot Building Footprints")
         self.btn_download.setStyleSheet(
-            "background-color: #10B981; color: white; font-weight: bold; font-size: 12px; padding: 8px 20px; border-radius: 4px;"
+            "background-color: #10B981; color: white; font-weight: bold; font-size: 12px; padding: 8px 22px; border-radius: 4px;"
         )
         self.btn_download.clicked.connect(self.start_download)
         btn_action_layout.addWidget(self.btn_download)
@@ -252,37 +289,37 @@ class GBADownloaderDialog(QDialog):
     def refresh_vector_layers(self):
         """Populates the combo box with polygon vector layers in the project."""
         self.combo_layers.clear()
-        self.combo_layers.addItem("-- Select Project Layer --", None)
+        self.combo_layers.addItem("-- Intersect Active Project Layer --", None)
         project = QgsProject.instance()
         for layer_id, layer in project.mapLayers().items():
             if isinstance(layer, QgsVectorLayer) and layer.geometryType() == 2:  # Polygon
                 self.combo_layers.addItem(layer.name(), layer)
 
     def populate_table(self, tiles):
-        """Fills the table widget with tile items."""
+        """Fills the table widget with tile items (with row and column indices)."""
         self.displayed_tiles = tiles
         self.table.blockSignals(True)
         self.table.setRowCount(len(tiles))
 
         for row_idx, item in enumerate(tiles):
-            # 0: Checkbox
+            # Column 0: Checkbox
             chk_item = QTableWidgetItem()
             chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             chk_item.setCheckState(Qt.Checked if len(tiles) <= 20 else Qt.Unchecked)
-            self.table.setItem(row_idx, chk_item)
+            self.table.setItem(row_idx, 0, chk_item)
 
-            # 1: Region
+            # Column 1: Region
             reg_item = QTableWidgetItem(item.get("region", ""))
             reg_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.table.setItem(row_idx, reg_item)
+            self.table.setItem(row_idx, 1, reg_item)
 
-            # 2: Tile Name
+            # Column 2: Tile Name
             tile_name = item.get("tile", "")
             name_item = QTableWidgetItem(tile_name)
             name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.table.setItem(row_idx, name_item)
+            self.table.setItem(row_idx, 2, name_item)
 
-            # 3: Size (MB)
+            # Column 3: Size (MB)
             size_mb = float(item.get("size_mb", 0.0))
             size_item = QTableWidgetItem(f"{size_mb:,.1f}")
             size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -291,19 +328,19 @@ class GBADownloaderDialog(QDialog):
                 size_item.setForeground(QBrush(QColor("#E11D48")))  # Red for >1 GB
             elif size_mb > 200.0:
                 size_item.setForeground(QBrush(QColor("#D97706")))  # Amber for >200 MB
-            self.table.setItem(row_idx, size_item)
+            self.table.setItem(row_idx, 3, size_item)
 
-            # 4: Bounding Box
+            # Column 4: Bounding Box
             bbox = item.get("bbox", [0, 0, 0, 0])
             bbox_str = f"[{bbox[0]:.1f}, {bbox[1]:.1f}, {bbox[2]:.1f}, {bbox[3]:.1f}]"
             bbox_item = QTableWidgetItem(bbox_str)
             bbox_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.table.setItem(row_idx, bbox_item)
+            self.table.setItem(row_idx, 4, bbox_item)
 
-            # 5: Status
+            # Column 5: Status
             status_item = QTableWidgetItem("Ready")
             status_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.table.setItem(row_idx, status_item)
+            self.table.setItem(row_idx, 5, status_item)
 
         self.table.blockSignals(False)
         self.update_summary()
@@ -358,8 +395,18 @@ class GBADownloaderDialog(QDialog):
             ]
         self.populate_table(filtered)
 
+    def reset_to_all_tiles(self):
+        """Clears search and restores all 922 tiles in table."""
+        self.txt_search.clear()
+        self.last_aoi_rect = None
+        self.last_aoi_geom = None
+        if self.rubber_band:
+            self.rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+        self.populate_table(self.all_tiles)
+        self.lbl_status.setText("Showing all 922 global tiles.")
+
     def load_grid_into_qgis(self):
-        """Adds the GBA 5°x5° index GeoJSON to the QGIS map canvas."""
+        """Adds the GBA 5°x5° index GeoJSON to the QGIS map canvas without invalid enum placement."""
         project = QgsProject.instance()
         existing = project.mapLayersByName(self.GRID_LAYER_NAME)
         if existing:
@@ -374,7 +421,7 @@ class GBADownloaderDialog(QDialog):
 
         # Clean style: transparent fill with distinct blue border
         sym = QgsFillSymbol.createSimple({
-            "color": "0,168,255,30",
+            "color": "0,168,255,25",
             "outline_color": "#0284C7",
             "outline_width": "0.8"
         })
@@ -383,7 +430,6 @@ class GBADownloaderDialog(QDialog):
         # Add rule-based labeling showing tile and size
         pal = QgsPalLayerSettings()
         pal.fieldName = "tile || '\n(' || round(size_mb, 1) || ' MB)'"
-        pal.placement = QgsPalLayerSettings.OverPoint
         txt_fmt = QgsTextFormat()
         txt_fmt.setSize(7.5)
         txt_fmt.setColor(QColor("#0F172A"))
@@ -401,6 +447,83 @@ class GBADownloaderDialog(QDialog):
         self.iface.messageBar().pushSuccess("GBA Downloader", "Added GBA 5°x5° Tile Grid layer to map.")
         return layer
 
+    # -------------------------------------------------------------
+    # AOI PLOTTING & SPATIAL INTERSECTIONS
+    # -------------------------------------------------------------
+    def activate_draw_aoi_tool(self):
+        """Allows user to drag an AOI box directly on the QGIS map canvas."""
+        canvas = self.iface.mapCanvas()
+        self.extent_tool = QgsMapToolExtent(canvas)
+        self.extent_tool.extentChanged.connect(self.on_aoi_extent_drawn)
+        canvas.setMapTool(self.extent_tool)
+
+        self.showMinimized()
+        self.iface.messageBar().pushInfo(
+            "GBA Downloader",
+            "Drag a rectangle on the map to define your Area of Interest (AOI)."
+        )
+
+    def on_aoi_extent_drawn(self, rect):
+        """Invoked when user finishes drawing an AOI rectangle on the canvas."""
+        canvas = self.iface.mapCanvas()
+        canvas.unsetMapTool(self.extent_tool)
+
+        # Restore dialog
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+        if rect.isEmpty():
+            return
+
+        src_crs = canvas.mapSettings().destinationCrs()
+        tgt_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+
+        if src_crs != tgt_crs:
+            transform = QgsCoordinateTransform(src_crs, tgt_crs, QgsProject.instance())
+            rect_4326 = transform.transformBoundingBox(rect)
+        else:
+            rect_4326 = rect
+
+        self.last_aoi_rect = rect_4326
+        self.last_aoi_geom = QgsGeometry.fromRect(rect_4326)
+
+        # Highlight AOI on canvas
+        self.highlight_aoi(rect)
+
+        # Intersect with GBA grid
+        intersecting = []
+        for t in self.all_tiles:
+            b = t.get("bbox", [0, 0, 0, 0])
+            tile_rect = QgsRectangle(b[0], b[1], b[2], b[3])
+            tile_geom = QgsGeometry.fromRect(tile_rect)
+            if self.last_aoi_geom.intersects(tile_geom):
+                intersecting.append(t)
+
+        self.populate_table(intersecting)
+        self.set_all_checked(True)
+        self.lbl_status.setText(f"AOI defined: {len(intersecting)} tile(s) cover this area.")
+        self.iface.messageBar().pushSuccess(
+            "GBA Downloader",
+            f"AOI plotted! Found {len(intersecting)} tile(s). Click 'Download & Plot Building Footprints'."
+        )
+
+    def highlight_aoi(self, rect):
+        """Highlights the defined AOI on the map canvas using a stylish translucent rubber band."""
+        try:
+            canvas = self.iface.mapCanvas()
+            if self.rubber_band is None:
+                self.rubber_band = QgsRubberBand(canvas, QgsWkbTypes.PolygonGeometry)
+                self.rubber_band.setColor(QColor(234, 88, 12, 45))        # Translucent orange
+                self.rubber_band.setStrokeColor(QColor(234, 88, 12, 230))  # Bold orange outline
+                self.rubber_band.setWidth(2)
+
+            geom = QgsGeometry.fromRect(rect)
+            self.rubber_band.setToGeometry(geom, None)
+            self.rubber_band.show()
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Could not highlight AOI on canvas: {e}", "GBADownloader", Qgis.Info)
+
     def filter_by_canvas_extent(self):
         """Finds all tiles that intersect current canvas extent in EPSG:4326."""
         canvas = self.iface.mapCanvas()
@@ -414,18 +537,21 @@ class GBADownloaderDialog(QDialog):
         else:
             extent_4326 = extent
 
-        geom_extent = QgsGeometry.fromRect(extent_4326)
+        self.last_aoi_rect = extent_4326
+        self.last_aoi_geom = QgsGeometry.fromRect(extent_4326)
+        self.highlight_aoi(extent)
 
         intersecting = []
         for t in self.all_tiles:
             b = t.get("bbox", [0, 0, 0, 0])
             tile_rect = QgsRectangle(b[0], b[1], b[2], b[3])
             tile_geom = QgsGeometry.fromRect(tile_rect)
-            if geom_extent.intersects(tile_geom):
+            if self.last_aoi_geom.intersects(tile_geom):
                 intersecting.append(t)
 
         self.populate_table(intersecting)
         self.set_all_checked(True)
+        self.lbl_status.setText(f"Found {len(intersecting)} tiles intersecting map canvas.")
         self.iface.messageBar().pushInfo("GBA Downloader", f"Found {len(intersecting)} tiles intersecting map canvas.")
 
     def filter_by_layer(self):
@@ -438,7 +564,6 @@ class GBADownloaderDialog(QDialog):
         tgt_crs = QgsCoordinateReferenceSystem("EPSG:4326")
         transform = QgsCoordinateTransform(layer.crs(), tgt_crs, QgsProject.instance()) if layer.crs() != tgt_crs else None
 
-        # Build union geometry of selected or all features
         geoms = []
         features = layer.selectedFeatures() if layer.selectedFeatureCount() > 0 else layer.getFeatures()
         for f in features:
@@ -453,6 +578,8 @@ class GBADownloaderDialog(QDialog):
             return
 
         combined_geom = QgsGeometry.unaryUnion(geoms)
+        self.last_aoi_geom = combined_geom
+        self.last_aoi_rect = combined_geom.boundingBox()
 
         intersecting = []
         for t in self.all_tiles:
@@ -464,6 +591,7 @@ class GBADownloaderDialog(QDialog):
 
         self.populate_table(intersecting)
         self.set_all_checked(True)
+        self.lbl_status.setText(f"Found {len(intersecting)} tiles intersecting layer '{layer.name()}'.")
         self.iface.messageBar().pushInfo("GBA Downloader", f"Found {len(intersecting)} tiles intersecting layer '{layer.name()}'.")
 
     def sync_from_map_selection(self):
@@ -493,6 +621,9 @@ class GBADownloaderDialog(QDialog):
             self.txt_dir.setText(chosen)
             QSettings().setValue("GBADownloader/download_dir", chosen)
 
+    # -------------------------------------------------------------
+    # DOWNLOAD & AUTO-PLOT ENGINE
+    # -------------------------------------------------------------
     def start_download(self):
         """Gathers selected tiles and initiates background download task."""
         selected_items = []
@@ -500,7 +631,6 @@ class GBADownloaderDialog(QDialog):
             chk = self.table.item(r, 0)
             if chk and chk.checkState() == Qt.Checked:
                 tile_id = self.table.item(r, 2).text()
-                # Find tile dict
                 match = next((t for t in self.displayed_tiles if t.get("tile") == tile_id), None)
                 if match:
                     selected_items.append(match)
@@ -514,7 +644,7 @@ class GBADownloaderDialog(QDialog):
             QMessageBox.warning(self, "Invalid Directory", "Please choose a valid download folder.")
             return
 
-        # Warning for huge downloads
+        # Warning for huge downloads (>3 GB)
         total_mb = sum(float(x.get("size_mb", 0.0)) for x in selected_items)
         if total_mb > 3000.0:
             resp = QMessageBox.question(
@@ -556,7 +686,6 @@ class GBADownloaderDialog(QDialog):
 
     def on_tile_started(self, tile_name, size_mb):
         self.lbl_status.setText(f"Downloading {tile_name} ({size_mb:.1f} MB)...")
-        # Update table status
         for r in range(self.table.rowCount()):
             if self.table.item(r, 2).text() == tile_name:
                 self.table.item(r, 5).setText("Downloading...")
@@ -586,7 +715,11 @@ class GBADownloaderDialog(QDialog):
         self.progress_bar.setValue(pct)
 
     def load_geojson_layer(self, tile_name, local_path):
-        """Loads downloaded GeoJSON footprints into the project under a dedicated group."""
+        """
+        Loads downloaded GeoJSON footprints into the project.
+        If 'Clip to AOI' is enabled and an AOI exists, only buildings inside the AOI are extracted and added!
+        Handles coordinate transformation between EPSG:4326 and layer CRS (EPSG:3857).
+        """
         project = QgsProject.instance()
         group_name = "GlobalBuildingAtlas Footprints"
         root = project.layerTreeRoot()
@@ -594,27 +727,92 @@ class GBADownloaderDialog(QDialog):
         if not group:
             group = root.addGroup(group_name)
 
-        layer_name = f"GBA_{tile_name}"
-        layer = QgsVectorLayer(local_path, layer_name, "ogr")
-        if layer.isValid():
-            # Style buildings nicely: warm gray polygon with fine dark outline
-            sym = QgsFillSymbol.createSimple({
-                "color": "#CBD5E1",
-                "outline_color": "#475569",
-                "outline_width": "0.4"
-            })
-            layer.setRenderer(QgsSingleSymbolRenderer(sym))
-            project.addMapLayer(layer, False)
-            group.addLayer(layer)
+        raw_layer = QgsVectorLayer(local_path, f"GBA_{tile_name}_raw", "ogr")
+        if not raw_layer.isValid():
+            QgsMessageLog.logMessage(f"Failed to read downloaded GeoJSON: {local_path}", "GBADownloader", Qgis.Warning)
+            return
+
+        should_clip = self.chk_clip_to_aoi.isChecked() and self.last_aoi_geom and not self.last_aoi_geom.isEmpty()
+
+        if should_clip:
+            fields = raw_layer.fields()
+            layer_crs = raw_layer.crs()
+            crs_auth = layer_crs.authid() if layer_crs.isValid() else "EPSG:3857"
+
+            # Reproject AOI geometry from EPSG:4326 to layer's native CRS (usually EPSG:3857)
+            tgt_crs = layer_crs if layer_crs.isValid() else QgsCoordinateReferenceSystem("EPSG:3857")
+            transform = QgsCoordinateTransform(QgsCoordinateReferenceSystem("EPSG:4326"), tgt_crs, project)
+            aoi_geom_layer = QgsGeometry(self.last_aoi_geom)
+            aoi_geom_layer.transform(transform)
+            aoi_rect_layer = aoi_geom_layer.boundingBox()
+
+            clip_layer_name = f"Buildings_{tile_name} (AOI Clipped)"
+            target_layer = QgsVectorLayer(f"Polygon?crs={crs_auth}", clip_layer_name, "memory")
+            dp = target_layer.dataProvider()
+            dp.addAttributes(fields.toList())
+            target_layer.updateFields()
+
+            req = QgsFeatureRequest().setFilterRect(aoi_rect_layer)
+            features_to_add = []
+            for f in raw_layer.getFeatures(req):
+                if f.hasGeometry() and f.geometry().intersects(aoi_geom_layer):
+                    features_to_add.append(f)
+
+            dp.addFeatures(features_to_add)
+            target_layer.updateExtents()
+            final_layer = target_layer
+
+            count = target_layer.featureCount()
+            QgsMessageLog.logMessage(
+                f"Extracted and plotted {count} building footprints within AOI from tile {tile_name}.",
+                "GBADownloader",
+                Qgis.Info
+            )
+            self.iface.messageBar().pushSuccess(
+                "GBA Downloader",
+                f"Plotted {count} building footprints inside your AOI from tile {tile_name}."
+            )
+        else:
+            final_layer = QgsVectorLayer(local_path, f"Buildings_{tile_name}", "ogr")
+
+        # Style buildings nicely: clean modern slate/indigo polygon with crisp outline
+        sym = QgsFillSymbol.createSimple({
+            "color": "203, 213, 225, 210",       # Light slate fill
+            "outline_color": "#334155",           # Slate-700 outline
+            "outline_width": "0.3"
+        })
+        final_layer.setRenderer(QgsSingleSymbolRenderer(sym))
+
+        project.addMapLayer(final_layer, False)
+        group.addLayer(final_layer)
+
+        # Automatically zoom canvas to the extracted building footprints
+        if final_layer.featureCount() > 0:
+            self.iface.mapCanvas().setExtent(final_layer.extent())
+            self.iface.mapCanvas().refresh()
 
     def on_download_finished(self):
         self.btn_download.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-        self.lbl_status.setText("All downloads finished!")
-        self.iface.messageBar().pushSuccess("GBA Downloader", "Building footprints downloaded successfully.")
+        self.lbl_status.setText("All downloads finished and building footprints plotted!")
+        self.iface.messageBar().pushSuccess("GBA Downloader", "Building footprints loaded successfully.")
 
     def on_download_canceled(self):
         self.btn_download.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.lbl_status.setText("Download canceled by user.")
         self.iface.messageBar().pushWarning("GBA Downloader", "Download task was canceled.")
+
+    def closeEvent(self, event):
+        """Cleans up map tool and rubber band when dialog closes."""
+        if self.extent_tool and self.iface:
+            try:
+                self.iface.mapCanvas().unsetMapTool(self.extent_tool)
+            except Exception:
+                pass
+        if self.rubber_band:
+            try:
+                self.rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+            except Exception:
+                pass
+        super().closeEvent(event)
