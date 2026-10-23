@@ -1,0 +1,17 @@
+[general]
+name=GBA Building Footprint Downloader
+qgisMinimumVersion=3.16
+qgisMaximumVersion=3.99
+description=Discover, filter, and download GlobalBuildingAtlas (GBA.ODbLPolygon) 5°x5° building footprints directly into QGIS.
+version=1.0.0
+author=Eqbal Hassan
+email=iqbal.spsc@gmail.com
+about=Interactive QGIS plugin for querying the GlobalBuildingAtlas GBA.ODbLPolygon tile index. Allows users to load the 5°x5° global grid, select tiles by canvas extent, intersecting vector layers, or manual selection, review download file sizes, download GeoJSON building footprints asynchronously in the background via QgsTask, and auto-load the resulting layers into QGIS.
+tracker=https://github.com/eqbalhassan/GBA-building-footprint-tile-index/issues
+repository=https://github.com/eqbalhassan/GBA-building-footprint-tile-index
+category=Vector
+tags=buildings, footprints, globalbuildingatlas, vector, download, huggingface, openstreetmap, microsoft
+homepage=https://github.com/eqbalhassan/GBA-building-footprint-tile-index
+icon=icon.png
+experimental=False
+deprecated=False

@@ -18,6 +18,7 @@ ENV/
 # Lock files and archives
 *.lock
 *.zip
+!qgis_plugin/*.zip
 *.tar.gz
 *.7z
 

@@ -4,6 +4,7 @@
 [![Tiles](https://img.shields.io/badge/Tiles-922_Polygons-green.svg)](#tiles-per-region)
 [![Total Dataset Size](https://img.shields.io/badge/Data_Size-~430_GB-orange.svg)](#tiles-per-region)
 [![CRS](https://img.shields.io/badge/CRS-EPSG%3A4326-lightgrey.svg)](#attribute-table)
+[![QGIS Plugin](https://img.shields.io/badge/QGIS_Plugin-gba__downloader-2b8a3e.svg)](#qgis-plugin-gba-building-footprint-downloader)
 [![Release](https://img.shields.io/badge/Release-v1.0.0-informational.svg)](https://github.com/eqbalhassan/GBA-building-footprint-tile-index/releases)
 
 A spatial index grid (ESRI Shapefile, GeoJSON, and CSV) with direct download URLs for the 922 five-degree ($5^\circ \times 5^\circ$) building-footprint tiles of the **GlobalBuildingAtlas `GBA.ODbLPolygon`** dataset hosted on Hugging Face.
@@ -16,14 +17,16 @@ The upstream Hugging Face repository stores hundreds of gigabytes of individual 
 
 - [About the Dataset and Data Host](#about-the-dataset-and-data-host)
 - [Repository Contents](#repository-contents)
+- [QGIS Plugin: GBA Building Footprint Downloader](#qgis-plugin-gba-building-footprint-downloader)
 - [Attribute Table Schema](#attribute-table-schema)
 - [Tile Naming Convention](#tile-naming-convention)
 - [Tiles Per Region](#tiles-per-region)
 - [How to Use](#how-to-use)
-  - [QGIS](#1-qgis)
-  - [ArcGIS Pro](#2-arcgis-pro)
-  - [Python (GeoPandas)](#3-python-geopandas)
-  - [Command Line (cURL)](#4-command-line-curl)
+  - [1. QGIS Plugin (Recommended)](#1-qgis-plugin-recommended)
+  - [2. QGIS Manual Layer Action](#2-qgis-manual-layer-action)
+  - [3. ArcGIS Pro](#3-arcgis-pro)
+  - [4. Python (GeoPandas)](#4-python-geopandas)
+  - [5. Command Line (cURL)](#5-command-line-curl)
 - [Important Notes and Caveats](#important-notes-and-caveats)
 - [How the Index Was Built and Regenerated](#how-the-index-was-built-and-regenerated)
 - [License, Attribution, and Citation](#license-attribution-and-citation)
@@ -62,6 +65,9 @@ GBA-building-footprint-tile-index/
 │   ├── GBA_ODbLPolygon_grid.prj   # WGS84 CRS definition
 │   ├── GBA_ODbLPolygon_grid.cpg   # UTF-8 encoding declaration
 │   └── GBA_ODbLPolygon_grid.geojson # Web-renderable GeoJSON map (renders on GitHub)
+├── qgis_plugin/                   # Dedicated QGIS GUI Downloader Plugin
+│   ├── gba_downloader.zip         # Ready-to-install plugin archive (Install from ZIP)
+│   └── gba_downloader/            # Source plugin package (metadata, UI, QgsTask downloader)
 ├── docs/
 │   ├── attribute_table.md         # Detailed field dictionary and dBASE specifications
 │   └── tiles_per_region.md        # Per-continent statistics, sizes, and insights
@@ -69,6 +75,32 @@ GBA-building-footprint-tile-index/
     ├── build_tile_index.py        # Automated, reproducible harvester and generator script
     └── requirements.txt           # Python script dependencies
 ```
+
+---
+
+## QGIS Plugin: GBA Building Footprint Downloader
+
+This repository includes a dedicated, feature-packed QGIS plugin located in [`qgis_plugin/gba_downloader/`](qgis_plugin/gba_downloader/):
+
+![Plugin Features](https://img.shields.io/badge/QGIS-3.16_to_3.99-green.svg)
+![Multi-threaded](https://img.shields.io/badge/QgsTask-Non--blocking-blue.svg)
+
+### Plugin Highlights:
+1. **Built-in 5° × 5° Grid**: Instantly displays the global index grid on your QGIS map canvas styled with semi-transparent fills and tile name/size labels.
+2. **Instant Spatial Queries**:
+   - **Canvas Extent**: Queries and selects all tiles intersecting your current map view.
+   - **Vector Layer Intersection**: Intersects any polygon vector layer in your project (e.g. city boundaries, district polygons, river basins) with the GBA grid.
+   - **Interactive Selection**: Select tiles directly using QGIS's map canvas selection tool.
+3. **Bandwidth & Storage Estimation**: Summarizes selected tile counts and total download sizes (in MB and GB), flagging empty tiles ($0\text{ MB}$) and huge files ($>1\text{ GB}$).
+4. **Asynchronous Background Downloads (`QgsTask`)**: Downloads files on worker threads with live transfer speeds and progress bars without freezing QGIS.
+5. **Automatic Layer Loading**: Automatically styles and loads downloaded GeoJSON footprints into your QGIS canvas under a dedicated `GlobalBuildingAtlas Footprints` layer group.
+
+### Installing the Plugin:
+- **Option A (Install from ZIP)**: In QGIS, open **Plugins** $\to$ **Manage and Install Plugins...** $\to$ **Install from ZIP**, select [`qgis_plugin/gba_downloader.zip`](qgis_plugin/gba_downloader.zip), and click **Install Plugin**.
+- **Option B (Direct Profile Folder)**: Copy the `qgis_plugin/gba_downloader` folder into your QGIS plugins folder:
+  - **Windows**: `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\`
+  - **Linux**: `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/`
+  - **macOS**: `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/`
 
 ---
 
@@ -147,7 +179,16 @@ For comprehensive notes on regional data density, see [docs/tiles_per_region.md]
 
 ## How to Use
 
-### 1. QGIS
+### 1. QGIS Plugin (Recommended)
+1. Install and enable the **GBA Building Footprint Downloader** plugin in QGIS (see [above](#qgis-plugin-gba-building-footprint-downloader)).
+2. Click the building footprint icon on your QGIS toolbar.
+3. Click **"Show 5° Grid on Map"** to load the global index.
+4. Zoom to your area of interest and click **"Intersect Current Map Extent"** (or use **"Intersect Active Layer"**).
+5. Review the download size in the table and click **"Download Selected Tiles"**.
+6. The building footprints will download in the background and appear automatically on your map!
+
+### 2. QGIS Manual Layer Action
+If you prefer not to use the plugin:
 1. Drag and drop `building_footprint/GBA_ODbLPolygon_grid.shp` (or `.geojson`) into QGIS.
 2. **Interactive Click-to-Download Action**:
    - Right-click layer $\to$ **Properties** $\to$ **Actions** tab.
@@ -159,7 +200,7 @@ For comprehensive notes on regional data density, see [docs/tiles_per_region.md]
    - Activate the **Run Feature Action** tool from the toolbar (or press `Ctrl+Shift+A`) and click any tile on the map to trigger immediate download in your default browser.
 3. **Attribute Table**: Open the attribute table, select rows for your area, and copy the `url` column directly.
 
-### 2. ArcGIS Pro
+### 3. ArcGIS Pro
 1. Add `GBA_ODbLPolygon_grid.shp` to an active Map.
 2. Use **Select By Location** to select all tiles intersecting your project boundary or AOI.
 3. Right-click layer $\to$ **Configure Pop-ups** $\to$ add a **Text / Hyperlink** pointing to `{url}`.
